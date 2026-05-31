@@ -1,7 +1,8 @@
 import argparse
-import os
 import json
 import math
+import os
+
 import networkx as nx
 import plotly.graph_objects as go
 
@@ -13,22 +14,17 @@ class EvalQuantity:
     MED = "med"
     BIG = "big"
 
-def to_eval_quantity_enum(eval_quantity, halluc=False):
-    # Convert a number to the corresponding EvalQuantity enum
-    if halluc:
-        if eval_quantity <= 1.5:
-            return EvalQuantity.SMALL
-        else:
-            return EvalQuantity.BIG
+def to_eval_quantity_enum(eval_quantity):
+    # Convert number of evaluated tasks to the corresponding EvalQuantity enum
+    # DGM-NN subsets: small=2, medium=4, big=6
+    if eval_quantity <= 2:
+        return EvalQuantity.SMALL
+    elif eval_quantity <= 4:
+        return EvalQuantity.MED
     else:
-        if eval_quantity <= 10:
-            return EvalQuantity.SMALL
-        elif eval_quantity <= 60:
-            return EvalQuantity.MED
-        else:
-            return EvalQuantity.BIG
+        return EvalQuantity.BIG
 
-def get_evalquantity(dgm_dir, node_id, metadata_name="metadata.json", halluc=False):
+def get_evalquantity(dgm_dir, node_id, metadata_name="metadata.json"):
     """
     Retrieve the eval_quantity from the metadata of a node.
     """
@@ -39,7 +35,7 @@ def get_evalquantity(dgm_dir, node_id, metadata_name="metadata.json", halluc=Fal
         metadata = json.load(f)
     overall_performance = metadata.get("overall_performance", {})
     eval_quantity = overall_performance.get("total_submitted_instances", 0) if overall_performance else 0
-    return to_eval_quantity_enum(eval_quantity, halluc=halluc)
+    return to_eval_quantity_enum(eval_quantity)
 
 def get_parent_commit(dgm_dir, child_node_id, metadata_name="metadata.json"):
     """
@@ -67,28 +63,6 @@ def get_performance_score(dgm_dir, node_id, metadata_name="metadata.json"):
     return round(score, 2)
 
 
-def get_hallucination_score(dgm_dir, node_id, metadata_name="metadata.json"):
-    """
-    Retrieve the 'solved_halluc_score' and, if it's 1, add the 'percent_toolutilized' from
-    the metadata of a node. The final range of this score is [0, 2].
-    """
-    metadata_path = os.path.join(dgm_dir, node_id, metadata_name)
-    if not os.path.exists(metadata_path):
-        raise FileNotFoundError(f"Metadata file not found for node {node_id} at {metadata_path}")
-    with open(metadata_path, "r") as f:
-        metadata = json.load(f)
-
-    halluc_perf = metadata.get("hallucination_performance", {})
-    solved_halluc_score = halluc_perf.get("solved_halluc_score", 0.0)
-    final_score = solved_halluc_score
-    if final_score == 1.0:
-        # Only add percent_toolutilized if solved_halluc_score is 1
-        percent_toolutilized = halluc_perf.get("percent_toolutilized", 0.0)
-        final_score += percent_toolutilized  # can be up to 2.0
-
-    return round(final_score, 2)
-
-
 def build_graph(dgm_dir, archives, score_func, metadata_name="metadata.json"):
     """
     Generic helper to build a DiGraph with node attributes from the archives.
@@ -104,17 +78,8 @@ def build_graph(dgm_dir, archives, score_func, metadata_name="metadata.json"):
         initial_metadata = json.load(f)
 
     # Root node metric score
-    if score_func == get_performance_score:
-        root_node_evalquant = to_eval_quantity_enum(initial_metadata.get("overall_performance", 0).get("total_submitted_instances", 0))
-        root_node_score = initial_metadata.get("overall_performance", {}).get("accuracy_score", 0.0)
-    else:
-        root_node_evalquant = to_eval_quantity_enum(initial_metadata.get("overall_performance", 0).get("total_submitted_instances", 0), halluc=True)
-        halluc_perf = initial_metadata.get("hallucination_performance", {})
-        solved_halluc_score = halluc_perf.get("solved_halluc_score", 0.0)
-        root_node_score = solved_halluc_score
-        if root_node_score == 1.0:
-            tool_util = halluc_perf.get("percent_toolutilized", 0.0)
-            root_node_score += tool_util
+    root_node_evalquant = to_eval_quantity_enum(initial_metadata.get("overall_performance", {}).get("total_submitted_instances", 0))
+    root_node_score = score_func(dgm_dir, "initial", metadata_name=metadata_name)
 
     index = 0
     graph.add_node(
@@ -144,7 +109,7 @@ def build_graph(dgm_dir, archives, score_func, metadata_name="metadata.json"):
                 metric_score = score_func(dgm_dir, child_node_id, metadata_name=metadata_name)
 
             # Get the eval quantity
-            eval_quantity = get_evalquantity(dgm_dir, child_node_id, metadata_name=metadata_name, halluc=(score_func == get_hallucination_score))
+            eval_quantity = get_evalquantity(dgm_dir, child_node_id, metadata_name=metadata_name)
 
             index += 1
             graph.add_node(
@@ -289,7 +254,7 @@ def create_plotly_figure(graph, pos, html_path, colorbar_title="Score"):
             showscale=True,
             colorbar=dict(
                 x=1.02, y=0.5, lenmode='fraction', len=0.9,
-                thickness=15, tickfont=dict(size=25), titlefont=dict(size=25),
+                thickness=15, tickfont=dict(size=25), title=dict(font=dict(size=25)),
             ),
             line=dict(width=3, color=node_border_color),
         ),
@@ -314,11 +279,11 @@ def create_plotly_figure(graph, pos, html_path, colorbar_title="Score"):
     fig.write_html(html_path)
     print(f"Saved interactive visualization to {html_path}")
     svg_path = html_path.replace('.html', '.svg')
-    if 'halluc' in colorbar_title.lower():
-        fig.write_image(svg_path, width=2200, height=800)
-    else:
+    try:
         fig.write_image(svg_path, width=1100, height=800)
-    print(f"Saved static visualization to {svg_path}")
+        print(f"Saved static visualization to {svg_path}")
+    except ValueError:
+        print("Skipping SVG export (kaleido not installed).")
 
 
 def visualize_experiment_run(dgm_dir, archives, metadata_name="metadata.json"):
@@ -334,40 +299,6 @@ def visualize_experiment_run(dgm_dir, archives, metadata_name="metadata.json"):
         html_path = os.path.join(dgm_dir, "dgm_tree.html")
 
     create_plotly_figure(graph, pos, html_path, colorbar_title="Score")
-
-
-def visualize_experiment_run_halluc(dgm_dir, archives, metadata_name="metadata.json"):
-    """
-    Visualize the experiment run as a directed tree-like graph (using the
-    solved_halluc_score + percent_toolutilized if solved=1).
-    The final range of this metric is [0, 2], but if compiled=False => 0.0
-    """
-    graph, pos = build_graph(dgm_dir, archives, score_func=get_hallucination_score, metadata_name=metadata_name)
-
-    # Decide on output HTML name
-    if metadata_name == "metadata_new.json":
-        html_path = os.path.join(dgm_dir, "dgm_tree_halluc_new.html")
-    else:
-        html_path = os.path.join(dgm_dir, "dgm_tree_halluc.html")
-
-    create_plotly_figure(graph, pos, html_path, colorbar_title="Halluc Score")
-
-
-def get_evalswe_command(dgm_dir, node_id):
-    """
-    Generate the command to evaluate a node on the SWE-bench dataset.
-    (Note: This does not depend on metadata naming.)
-    """
-    root_dir = os.path.abspath("./")  # should be the root of this repo
-    patch_paths = get_model_patch_paths(root_dir, dgm_dir, node_id)
-    model_patch_paths = f"\"{','.join(patch_paths)}\""
-    model_name_or_path = f"dgmnode_{node_id}"
-    command = (
-        "python test_swebench.py --full_eval --num_samples 50 "
-        f"--model_patch_paths {model_patch_paths} "
-        f"--model_name_or_path {model_name_or_path}\n"
-    )
-    return command
 
 
 def analyse_experiment_run(dgm_dir, archives, metadata_name="metadata.json"):
@@ -400,18 +331,21 @@ def analyse_experiment_run(dgm_dir, archives, metadata_name="metadata.json"):
         avg_score = None
 
     # Prepare the analysis string
-    analysis_str = "=== Experiment Run Analysis (Accuracy Score) ===\n"
+    analysis_str = "=== DGM-NN Experiment Run Analysis (Accuracy Score) ===\n"
     analysis_str += f"Number of compiled runs: {num_compiled}\n"
     if num_compiled > 0:
         analysis_str += f"Highest score: {best_score}\n"
         analysis_str += f"Lowest score:  {worst_score}\n"
         analysis_str += f"Average score: {round(avg_score, 2)}\n"
 
-    analysis_str += "\nCommands to eval highest scoring runs on SWE-Bench:\n"
+    # Show patch lineage for best runs
+    analysis_str += "\nPatch lineage for highest scoring runs:\n"
     if num_compiled > 0:
+        root_dir = os.path.abspath("./")
         highest_scored = [node_id for node_id, score in compiled_runs if score == best_score]
         for node_id in highest_scored:
-            analysis_str += f"{node_id}: {get_evalswe_command(dgm_dir, node_id)}"
+            patch_paths = get_model_patch_paths(root_dir, dgm_dir, node_id)
+            analysis_str += f"  {node_id} ({len(patch_paths)} patches): {' -> '.join(os.path.basename(os.path.dirname(p)) for p in patch_paths)}\n"
 
     analysis_str += "\nCompiled runs sorted by score (descending):\n"
     for node_id, score in compiled_runs:
@@ -433,77 +367,9 @@ def analyse_experiment_run(dgm_dir, archives, metadata_name="metadata.json"):
     print(f"Analysis saved to {analysis_path}")
 
 
-def analyse_experiment_run_halluc(dgm_dir, archives, metadata_name="metadata.json"):
-    """
-    Analyse the experiment run (using solved_halluc_score + percent_toolutilized if solved=1)
-    and print some statistics.
-    """
-    compiled_runs = []
-
-    # Collect (node_id, "halluc+tool" score) for all children,
-    # BUT if a node is not compiled, the score is forced to 0.0
-    for archive in archives:
-        children = archive.get("children", [])
-        children_compiled = archive.get("children_compiled", [])
-        for child_node_id in children:
-            if child_node_id in children_compiled:
-                halluc_score = get_hallucination_score(dgm_dir, child_node_id, metadata_name=metadata_name)
-            else:
-                halluc_score = 0.0
-            compiled_runs.append((child_node_id, halluc_score))
-
-    # Sort by halluc_score descending
-    compiled_runs.sort(key=lambda x: x[1], reverse=True)
-
-    # Compute basic statistics
-    num_compiled = len(compiled_runs)
-    if num_compiled > 0:
-        best_score = compiled_runs[0][1]
-        worst_score = compiled_runs[-1][1]
-        avg_score = sum(score for _, score in compiled_runs) / num_compiled
-    else:
-        best_score = None
-        worst_score = None
-        avg_score = None
-
-    # Prepare the analysis string
-    analysis_str = "=== Experiment Run Analysis (Hallucination Score + Tool Util) ===\n"
-    analysis_str += f"Number of compiled runs: {num_compiled}\n"
-    if num_compiled > 0:
-        analysis_str += f"Highest final halluc score: {best_score}\n"
-        analysis_str += f"Lowest final halluc score:  {worst_score}\n"
-        analysis_str += f"Average final halluc score: {round(avg_score, 2)}\n"
-
-    analysis_str += "\nCommands to eval highest scoring runs on SWE-Bench:\n"
-    if num_compiled > 0:
-        highest_scored = [node_id for node_id, score in compiled_runs if score >= 1.5]
-        for node_id in highest_scored:
-            analysis_str += f"{node_id}: {get_evalswe_command(dgm_dir, node_id)}"
-
-    analysis_str += "\nCompiled runs sorted by final halluc score (descending):\n"
-    for node_id, score in compiled_runs:
-        analysis_str += f"  {node_id}: {score}\n"
-    analysis_str += "================================\n"
-
-    # Decide on the halluc analysis file name
-    if metadata_name == "metadata_new.json":
-        analysis_filename = "dgm_analysis_halluc_new.txt"
-    else:
-        analysis_filename = "dgm_analysis_halluc.txt"
-
-    analysis_path = os.path.join(dgm_dir, analysis_filename)
-    with open(analysis_path, "w") as f:
-        f.write(analysis_str)
-
-    # Print the analysis string
-    print(analysis_str)
-    print(f"Analysis saved to {analysis_path}")
-
-
 def main():
-    parser = argparse.ArgumentParser(description="Visualize and analyze DGM archive.")
-    parser.add_argument("--path", type=str, required=True, help="Path to the DGM run.")
-    parser.add_argument("--halluc", action="store_true", help="Plot hallucination scores too.")
+    parser = argparse.ArgumentParser(description="Visualize and analyze DGM-NN archive.")
+    parser.add_argument("--path", type=str, required=True, help="Path to the DGM-NN run.")
     parser.add_argument("--metadata_new", action="store_true", help="Use metadata_new.json instead of metadata.json (and save plots and analyses as *_new.*).")
     parser.add_argument("--trunc_gens", type=int, default=0, help="Truncate the number of iterations to plot (0 = no truncation).")
     args = parser.parse_args()
@@ -520,14 +386,9 @@ def main():
     archives = load_dgm_metadata(os.path.join(dgm_dir, "dgm_metadata.jsonl"))
     archives = archives[:args.trunc_gens] if args.trunc_gens > 0 else archives
 
-    # Standard visualization & analysis (using accuracy_score)
+    # Visualization & analysis (using accuracy_score)
     visualize_experiment_run(dgm_dir, archives, metadata_name=metadata_name)
     analyse_experiment_run(dgm_dir, archives, metadata_name=metadata_name)
-
-    # Hallucination visualization & analysis (using solved_halluc_score + percent_toolutilized)
-    if args.halluc:
-        visualize_experiment_run_halluc(dgm_dir, archives, metadata_name=metadata_name)
-        analyse_experiment_run_halluc(dgm_dir, archives, metadata_name=metadata_name)
 
 
 if __name__ == "__main__":
