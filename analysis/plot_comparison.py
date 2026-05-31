@@ -58,10 +58,10 @@ def get_run_info(dgm_dir):
     }
 
 def make_plot(all_iterations, all_infos, info_label, all_its=False):
-    # Add SoTA line
+    # Add threshold line (average of small subset thresholds: MNIST 0.99, Fashion-MNIST 0.90)
     if info_label == 'best':
-        sota_score = 0.51
-        plt.axhline(y=sota_score, color='#DB4437', linestyle='--', label="Checked Open-sourced SoTA")
+        threshold_score = 0.945
+        plt.axhline(y=threshold_score, color='#DB4437', linestyle='--', label="Avg. Threshold (Small Subset)")
 
     # Plot the comparisons for given info_label
     labels = {
@@ -90,7 +90,7 @@ def make_plot(all_iterations, all_infos, info_label, all_its=False):
     # Get y label
     y_label = info_label
     if info_label == 'best':
-        y_label = "SWE-bench Score of Best Agent"
+        y_label = "Accuracy Score of Best Agent"
 
     plt.xlabel("Iterations", fontsize=15)
     plt.ylabel(y_label, fontsize=15)
@@ -114,10 +114,10 @@ def make_plot(all_iterations, all_infos, info_label, all_its=False):
 
 def main():
     parser = argparse.ArgumentParser(description="Plot the comparisons between DGM and baselines.")
-    parser.add_argument("--path_dgm", type=str, default='/home/ubuntu/jz/dgm/output_dgm/20250327044505_709513', help="Path to the DGM run.")
-    parser.add_argument("--path_no_selfimprove", type=str, default='/home/ubuntu/jz/dgm/output_dgm/20250407212512_767109', help="Path to the baseline (no_selfimprove) run.")
-    parser.add_argument("--path_no_darwin", type=str, default='/home/ubuntu/jz/dgm/output_dgm/20250416053414_894280', help="Path to the baseline (no_darwin) run.")
-    parser.add_argument("--path_greedy", type=str, default='/home/ubuntu/jz/dgm/output_dgm/20250513092114_209162', help="Path to the baseline (greedy) run.")
+    parser.add_argument("--path_dgm", type=str, default=None, help="Path to the DGM-NN run.")
+    parser.add_argument("--path_no_selfimprove", type=str, default=None, help="Path to the baseline (no_selfimprove) run.")
+    parser.add_argument("--path_no_darwin", type=str, default=None, help="Path to the baseline (no_darwin) run.")
+    parser.add_argument("--path_greedy", type=str, default=None, help="Path to the baseline (greedy) run.")
     parser.add_argument("--all_its", action='store_true', help="Plot all iterations instead of the minimum count.")
     args = parser.parse_args()
 
