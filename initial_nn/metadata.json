@@ -1,0 +1,12 @@
+{
+    "run_id": "initial",
+    "parent_commit": null,
+    "overall_performance": {
+        "accuracy_score": 0.0,
+        "total_submitted_instances": 2,
+        "total_resolved_instances": 0,
+        "total_resolved_ids": [],
+        "total_unresolved_ids": ["mnist", "fashion_mnist"],
+        "total_emptypatch_ids": []
+    }
+}
