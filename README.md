@@ -88,9 +88,6 @@ DGM/
 │   └── nn_eval_utils.py            # Métricas e diagnóstico de treinamento
 ├── analysis/                       # Scripts de análise (referência do original)
 ├── tests/                          # Testes unitários
-└── Observações/                    # Documentação interna
-    ├── planejamento.md             # Plano de implementação (9 fases)
-    └── viabilidade_pratica.md      # Decisões de infraestrutura
 ```
 
 ## Tarefas de Treinamento
