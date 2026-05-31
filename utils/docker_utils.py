@@ -215,9 +215,9 @@ def copy_from_container(container, source_path: Union[str, Path], dest_path: Uni
         if result.exit_code and result.exit_code != 0:
             raise FileNotFoundError(f"Source path not found in container: {source_path}")
             
-        # Get file type from container
-        result = container.exec_run(f"stat -f '%HT' {source_path}")
-        is_file = result.output.decode().strip() == 'Regular File'
+        # Get file type from container (GNU stat, Linux containers)
+        result = container.exec_run(f"stat -c '%F' {source_path}")
+        is_file = result.output.decode().strip() == 'regular file'
             
         # Create destination directory if it doesn't exist
         dest_path.parent.mkdir(parents=True, exist_ok=True)
