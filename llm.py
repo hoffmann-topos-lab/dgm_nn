@@ -1,4 +1,3 @@
-# Code adapted from https://github.com/SakanaAI/AI-Scientist/blob/main/ai_scientist/llm.py.
 import json
 import os
 import re
@@ -9,37 +8,38 @@ import openai
 
 MAX_OUTPUT_TOKENS = 4096
 AVAILABLE_LLMS = [
-    # Anthropic models
-    "claude-3-5-sonnet-20240620",
+    # Anthropic models (API direta)
     "claude-3-5-sonnet-20241022",
+    "claude-sonnet-4-6",
+    "claude-haiku-4-5-20251001",
     # OpenAI models
-    "gpt-4o-mini-2024-07-18",
-    "gpt-4o-2024-05-13",
-    "gpt-4o-2024-08-06",
-    "o1-preview-2024-09-12",
-    "o1-mini-2024-09-12",
-    "o1-2024-12-17",
+    "gpt-5.4",
+    "gpt-5.4-mini",
+    "gpt-5.4-nano",
     "o3-mini-2025-01-31",
-    # OpenRouter models
-    "llama3.1-405b",
-    # Anthropic Claude models via Amazon Bedrock
-    "bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
-    "bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
-    "bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0",
-    "bedrock/anthropic.claude-3-haiku-20240307-v1:0",
-    "bedrock/anthropic.claude-3-opus-20240229-v1:0",
-    "bedrock/us.anthropic.claude-3-5-sonnet-20241022-v2:0",
-    # Anthropic Claude models Vertex AI
-    "vertex_ai/claude-3-opus@20240229",
-    "vertex_ai/claude-3-5-sonnet@20240620",
-    "vertex_ai/claude-3-5-sonnet-v2@20241022",
-    "vertex_ai/claude-3-sonnet@20240229",
-    "vertex_ai/claude-3-haiku@20240307",
-    # DeepSeek models
-    "deepseek-chat",
-    "deepseek-coder",
-    "deepseek-reasoner",
+    "o4-mini",
 ]
+
+def _is_openai_model(model: str) -> bool:
+    """Check if a model string refers to an OpenAI model."""
+    return (
+        'gpt' in model
+        or model.startswith("o1-")
+        or model.startswith("o3-")
+        or model.startswith("o4-")
+    )
+
+def _is_openai_reasoning_model(model: str) -> bool:
+    """Check if an OpenAI model is a reasoning model (o1/o3/o4 series)."""
+    return (
+        model.startswith("o1-")
+        or model.startswith("o3-")
+        or model.startswith("o4-")
+    )
+
+def _uses_max_completion_tokens(model: str) -> bool:
+    """GPT-5.4+ and reasoning models use max_completion_tokens instead of max_tokens."""
+    return _is_openai_reasoning_model(model) or 'gpt-5' in model
 
 def create_client(model: str):
     """
@@ -49,40 +49,14 @@ def create_client(model: str):
     Returns:
         Tuple[Any, str]: A tuple containing the client instance and the client model name.
     """
-    if model.startswith("claude-"):
+    if model.startswith("claude-") or model.startswith("claude_"):
         print(f"Using Anthropic API with model {model}.")
         return anthropic.Anthropic(), model
-    elif model.startswith("bedrock") and "claude" in model:
-        client_model = model.split("/")[-1]
-        print(f"Using Amazon Bedrock with model {client_model}.")
-        client = anthropic.AnthropicBedrock(
-            aws_access_key=os.getenv("AWS_ACCESS_KEY_ID"),
-            aws_secret_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
-            aws_region=os.getenv("AWS_REGION_NAME"),
-        )
-        return client, client_model
-    elif model.startswith("vertex_ai") and "claude" in model:
-        client_model = model.split("/")[-1]
-        print(f"Using Vertex AI with model {client_model}.")
-        return anthropic.AnthropicVertex(), client_model
-    elif 'gpt' in model or model.startswith("o1-") or model.startswith("o3-"):
+    elif _is_openai_model(model):
         print(f"Using OpenAI API with model {model}.")
         return openai.OpenAI(), model
-    elif model.startswith("deepseek-"):
-        print(f"Using OpenAI API with {model}.")
-        client = openai.OpenAI(
-            api_key=os.environ["DEEPSEEK_API_KEY"],
-            base_url="https://api.deepseek.com"
-        )
-        return client, model
-    elif model == "llama3.1-405b":
-        print(f"Using OpenAI API with {model}.")
-        client = openai.OpenAI(
-            api_key=os.environ["OPENROUTER_API_KEY"],
-            base_url="https://openrouter.ai/api/v1"
-        ), model
     else:
-        raise ValueError(f"Model {model} not supported.")
+        raise ValueError(f"Model {model} not supported. Available: {AVAILABLE_LLMS}")
 
 # Get N responses from a single message, used for ensembling.
 @backoff.on_exception(backoff.expo, (openai.RateLimitError, openai.APITimeoutError))
@@ -99,12 +73,9 @@ def get_batch_responses_from_llm(
     if msg_history is None:
         msg_history = []
 
-    if model in [
-        "gpt-4o-2024-05-13",
-        "gpt-4o-mini-2024-07-18",
-        "gpt-4o-2024-08-06",
-    ]:
+    if _is_openai_model(model) and not _is_openai_reasoning_model(model):
         new_msg_history = msg_history + [{"role": "user", "content": msg}]
+        token_param = "max_completion_tokens" if _uses_max_completion_tokens(model) else "max_tokens"
         response = client.chat.completions.create(
             model=model,
             messages=[
@@ -112,27 +83,10 @@ def get_batch_responses_from_llm(
                 *new_msg_history,
             ],
             temperature=temperature,
-            max_tokens=MAX_OUTPUT_TOKENS,
+            **{token_param: MAX_OUTPUT_TOKENS},
             n=n_responses,
             stop=None,
             seed=0,
-        )
-        content = [r.message.content for r in response.choices]
-        new_msg_history = [
-            new_msg_history + [{"role": "assistant", "content": c}] for c in content
-        ]
-    elif model == "llama-3-1-405b-instruct":
-        new_msg_history = msg_history + [{"role": "user", "content": msg}]
-        response = client.chat.completions.create(
-            model="meta-llama/llama-3.1-405b-instruct",
-            messages=[
-                {"role": "system", "content": system_message},
-                *new_msg_history,
-            ],
-            temperature=temperature,
-            max_tokens=MAX_OUTPUT_TOKENS,
-            n=n_responses,
-            stop=None,
         )
         content = [r.message.content for r in response.choices]
         new_msg_history = [
@@ -212,40 +166,22 @@ def get_response_from_llm(
                 ],
             }
         ]
-    elif model.startswith("gpt-4o-"):
-        new_msg_history = msg_history + [{"role": "user", "content": msg}]
-        response = client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": system_message},
-                *new_msg_history,
-            ],
-            temperature=temperature,
-            max_tokens=MAX_OUTPUT_TOKENS,
-            n=1,
-            stop=None,
-            seed=0,
-        )
-        content = response.choices[0].message.content
-        new_msg_history = new_msg_history + [{"role": "assistant", "content": content}]
-    elif model.startswith("o1-") or model.startswith("o3-"):
+    elif _is_openai_reasoning_model(model):
+        # Reasoning models (o1/o3/o4): no system message, temperature=1
         new_msg_history = msg_history + [{"role": "user", "content": system_message + msg}]
         response = client.chat.completions.create(
             model=model,
-            messages=[
-                # {"role": "user", "content": system_message},
-                *new_msg_history,
-            ],
+            messages=[*new_msg_history],
             temperature=1,
-            # max_completion_tokens=MAX_OUTPUT_TOKENS,
             n=1,
-            # stop=None,
             seed=0,
         )
         content = response.choices[0].message.content
         new_msg_history = new_msg_history + [{"role": "assistant", "content": content}]
-    elif model in ["deepseek-chat", "deepseek-coder"]:
+    elif _is_openai_model(model):
+        # Standard OpenAI chat models (gpt-*)
         new_msg_history = msg_history + [{"role": "user", "content": msg}]
+        token_param = "max_completion_tokens" if _uses_max_completion_tokens(model) else "max_tokens"
         response = client.chat.completions.create(
             model=model,
             messages=[
@@ -253,44 +189,13 @@ def get_response_from_llm(
                 *new_msg_history,
             ],
             temperature=temperature,
-            max_tokens=MAX_OUTPUT_TOKENS,
+            **{token_param: MAX_OUTPUT_TOKENS},
             n=1,
             stop=None,
+            seed=0,
         )
         content = response.choices[0].message.content
         new_msg_history = new_msg_history + [{"role": "assistant", "content": content}]
-    elif model in ["deepseek-reasoner"]:
-        new_msg_history = msg_history + [{"role": "user", "content": msg}]
-        response = client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": system_message},
-                *new_msg_history,
-            ],
-            n=1,
-            stop=None,
-        )
-        content = response.choices[0].message.content
-        new_msg_history = new_msg_history + [{"role": "assistant", "content": content}]
-        reasoning_content = response.choices[0].message.reasoning_content
-    elif model.startswith("llama3.1-"):
-        llama_size = model.split("-")[-1]
-        client_model = f"meta-llama/llama-3.1-{llama_size}-instruct"
-        new_msg_history = msg_history + [{"role": "user", "content": msg}]
-        response = client.chat.completions.create(
-            model=client_model,
-            messages=[
-                {"role": "system", "content": system_message},
-                *new_msg_history,
-            ],
-            temperature=temperature,
-            max_tokens=MAX_OUTPUT_TOKENS,
-            n=1,
-            stop=None,
-        )
-        content = response.choices[0].message.content
-        new_msg_history = new_msg_history + [{"role": "assistant", "content": content}]
-        resoning_content = response.choices[0].message.reasoning_content
     else:
         raise ValueError(f"Model {model} not supported.")
     if print_debug:
@@ -305,26 +210,26 @@ def get_response_from_llm(
 def extract_json_between_markers(llm_output):
     inside_json_block = False
     json_lines = []
-    
+
     # Split the output into lines and iterate
     for line in llm_output.split('\n'):
         striped_line = line.strip()
-        
+
         # Check for start of JSON code block
         if striped_line.startswith("```json"):
             inside_json_block = True
             continue
-        
+
         # Check for end of code block
         if inside_json_block and striped_line.startswith("```"):
             # We've reached the closing triple backticks.
             inside_json_block = False
             break
-        
+
         # If we're inside the JSON block, collect the lines
         if inside_json_block:
             json_lines.append(line)
-    
+
     # If we never found a JSON code block, fallback to any JSON-like content
     if not json_lines:
         # Fallback: Try a regex that finds any JSON-like object in the text
@@ -346,7 +251,7 @@ def extract_json_between_markers(llm_output):
 
     # Join all lines in the JSON block into a single string
     json_string = "\n".join(json_lines).strip()
-    
+
     # Try to parse the collected JSON lines
     try:
         return json.loads(json_string)
