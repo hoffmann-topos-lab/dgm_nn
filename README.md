@@ -1,98 +1,117 @@
-<h1 align="center">
-    Darwin Gödel Machine:<br/>Open-Ended Evolution of Self-Improving Agents
-</h1>
+# Darwin Gödel Machine — Neural Network Trainer (DGM-NN)
 
-<p align="center">
-  <a href="https://github.com/jennyzzt/dgm/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg?style=for-the-badge"></a>
-  <a href="https://arxiv.org/abs/2505.22954"><img src="https://img.shields.io/badge/arXiv-2505.22954-b31b1b.svg?logo=arxiv&style=for-the-badge"></a>
-  <a href="https://sakana.ai/dgm/"><img src="https://img.shields.io/badge/-Blog-%238D6748?style=for-the-badge&logo=Website&logoColor=white"></a>
-  <a href="https://x.com/SakanaAILabs/status/1928272612431646943"><img src="https://img.shields.io/badge/twitter-%230077B5.svg?&style=for-the-badge&logo=twitter&logoColor=white&color=00acee"></a>
-  <a href="https://drive.google.com/drive/folders/1Kcu9TbIa9Z50pJ7S6hH9omzzD1pxIYZC?usp=sharing"><img src="https://img.shields.io/badge/Experiment%20Logs-4285F4?style=for-the-badge&logo=googledrive&logoColor=white"></a>
-</p>
+Um sistema de evolução aberta onde agentes baseados em LLM se auto-aprimoram iterativamente, modificando o próprio código-fonte de um agente de treinamento de redes neurais e avaliando os resultados em benchmarks de ML.
 
+Adaptado do [DGM original](https://arxiv.org/abs/2505.22954) (Sakana AI), que evolui um agente de coding para SWE-bench. Aqui, o que evolui é o scaffolding de treinamento de redes neurais (`nn_agent.py`): arquitetura, otimizador, data augmentation, loop de treino, etc. Os pesos do LLM permanecem congelados.
 
-Repository for **Darwin Gödel Machine (DGM)**, a novel self-improving system that iteratively modifies its own code (thereby also improving its ability to modify its own codebase) and empirically validates each change using coding benchmarks.
+## Como funciona
 
-<p align="center">
-  <img src="./misc/overview.gif" width="100%" height="auto" />
-</p>
-<!-- <p align="center">
-<img src="./misc/conceptual.svg"/></a><br>
-</p> -->
+```
+DGM_outer.py  →  self_improve_step.py  →  nn_agent.py  →  nn_bench/ harness
+     ↑                                                           |
+     └──────────── atualização do archive (mantém os melhores) ─┘
+```
 
+1. O **archive** mantém os agentes com melhor accuracy (seleção Darwiniana)
+2. A cada geração, um LLM analisa os logs de treinamento do agente pai e propõe melhorias
+3. O agente modifica seu próprio código de treinamento (auto-referência Gödeliana)
+4. O harness executa o agente modificado em Docker e mede accuracy/loss
+5. Se o filho supera o pai, entra no archive
 
 ## Setup
-```bash
-# API keys, add to ~/.bashrc
-export OPENAI_API_KEY='...'
-export ANTHROPIC_API_KEY='...'
-```
 
 ```bash
-# Verify that Docker is properly configured in your environment.
-docker run hello-world
- 
-# If a permission error occurs, add the user to the Docker group
-sudo usermod -aG docker $USER
-newgrp docker
-```
-
-```bash
-# Install dependencies
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 
-# Optional: for running analysis
-sudo apt-get install graphviz graphviz-dev
+# Opcional: para rodar scripts de análise (analysis/)
 pip install -r requirements_dev.txt
 ```
 
-```bash
-# Clone SWE-bench
-cd swe_bench
-git clone https://github.com/princeton-nlp/SWE-bench.git
-cd SWE-bench
-git checkout dc4c087c2b9e4cefebf2e3d201d27e36
-pip install -e .
-cd ../../
+Docker deve estar rodando e acessível ao usuário atual.
 
-# Prepare Polyglot
-# Make sure git is properly configured in your environment with username and email
-python -m polyglot.prepare_polyglot_dataset
-```
+Copie `.env.example` para `.env` e configure as API keys do provedor LLM escolhido.
 
-## Running the DGM
+## Uso
+
 ```bash
+# Rodar o loop de evolução
 python DGM_outer.py
+
+# Flags principais
+python DGM_outer.py \
+  --max_generation 20 \
+  --selfimprove_size 2 \
+  --selfimprove_workers 1 \
+  --continue_from <output_dir>  # Retomar uma run anterior
+  --shallow_eval                # Avaliação rasa (1 tarefa)
+  --run_baseline no_selfimprove # Ablação: sem auto-melhoria
+
+# Rodar testes
+pytest tests/
 ```
-By default, outputs will be saved in the `output_dgm/` directory.
 
-## File Structure
-- `analysis/` scripts used for plotting and analysis
-- `initial/` SWE-bench logs and performance of the initial agent
-- `initial_polyglot/` Polyglot logs and performance of the initial agent
-- `swe_bench/` code needed for SWE-bench evaluation
-- `polyglot/` code needed for Polyglot evaluation
-- `prompts/` prompts used for foundation models
-- `tests/` tests for the DGM system
-- `tools/` tools available to the foundation models
-- `coding_agent.py` main implementation of the initial coding agent
-- `DGM_outer.py` entry point for running the DGM algorithm
+Outputs são salvos em `output_dgm/`.
 
-## Logs from Experiments
-This [google drive folder](https://drive.google.com/drive/folders/1Kcu9TbIa9Z50pJ7S6hH9omzzD1pxIYZC?usp=sharing) contains all the foundation model output logs from the experiments shown in the paper.
+## Estrutura do Projeto
 
-## Safety Consideration
-> [!WARNING]  
-> This repository involves executing untrusted, model-generated code. We strongly advise users to be aware of the associated safety risks. While it is highly unlikely that such code will perform overtly malicious actions under our current settings and with the models we use, it may still behave destructively due to limitations in model capability or alignment. By using this repository, you acknowledge and accept these risks.
+```
+DGM/
+├── DGM_outer.py                    # Loop de evolução principal
+├── self_improve_step.py            # Step de auto-melhoria (LLM + harness)
+├── nn_agent.py                     # Agente de treinamento (evoluído pelo DGM)
+├── llm.py                          # Cliente LLM unificado (Anthropic, OpenAI, etc.)
+├── llm_withtools.py                # Loop agêntico com tool use
+├── Dockerfile                      # Container com PyTorch CPU + datasets
+├── requirements.txt
+├── .env.example                    # Template de variáveis de ambiente
+├── nn_bench/                       # Harness de avaliação
+│   ├── harness.py                  # Execução Docker por tarefa
+│   ├── tasks.py                    # Definição das tarefas (datasets, thresholds)
+│   ├── report.py                   # Agregação de resultados
+│   └── subsets/                    # small.json, medium.json, big.json
+├── initial_nn/                     # Agente semente (baseline)
+│   └── logs/
+├── prompts/
+│   ├── tooluse_prompt.py           # Prompt de tool use
+│   ├── nn_self_improvement_prompt.py  # Diagnóstico de logs de treinamento
+│   └── (legados do DGM original, mantidos como referência)
+├── tools/
+│   ├── bash.py                     # Ferramenta bash para o agente
+│   └── edit.py                     # Ferramenta de edição para o agente
+├── utils/
+│   ├── docker_utils.py             # Gerenciamento de containers
+│   ├── git_utils.py                # Operações git (diff, patch)
+│   ├── evo_utils.py                # Lógica de archive/evolução
+│   ├── common_utils.py             # Utilitários genéricos
+│   └── nn_eval_utils.py            # Métricas e diagnóstico de treinamento
+├── analysis/                       # Scripts de análise (referência do original)
+├── tests/                          # Testes unitários
+└── Observações/                    # Documentação interna
+    ├── planejamento.md             # Plano de implementação (9 fases)
+    └── viabilidade_pratica.md      # Decisões de infraestrutura
+```
 
-## Acknowledgement
+## Tarefas de Treinamento
 
-The evaluation framework implementations are based on the [SWE-bench](https://github.com/swe-bench/SWE-bench) and [polyglot-benchmark](https://github.com/Aider-AI/polyglot-benchmark) repositories.
+| ID | Subset | Threshold | Tempo máx. |
+|---|---|---|---|
+| `mnist` | small | 99% | 2 min |
+| `fashion_mnist` | small | 90% | 2 min |
+| `cifar10` | medium | 85% | 10 min |
+| `cifar100` | medium | 55% | 10 min |
+| `svhn` | big | 92% | 30 min |
+| `stl10` | big | 75% | 30 min |
 
-## Citing
-If you find this project useful, please consider citing:
+## Aviso de Seguranca
+
+> **Atenção**: Este sistema executa código não-confiável gerado por modelos de linguagem. Todo código gerado roda dentro de containers Docker para isolamento, mas riscos residuais existem. Use por sua conta e risco.
+
+## Créditos
+
+Baseado no [Darwin Gödel Machine](https://github.com/jennyzzt/dgm) (Zhang et al., 2025, Sakana AI).
+
 ```bibtex
 @article{zhang2025darwin,
   title={Darwin Godel Machine: Open-Ended Evolution of Self-Improving Agents},
