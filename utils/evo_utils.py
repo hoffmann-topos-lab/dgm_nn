@@ -40,7 +40,7 @@ def get_model_patch_paths(root_dir, dgm_dir, parent_commit):
         prev_commit = parent_metadata.get('parent_commit', 'initial')
     return patch_files[::-1]  # reverse the list to get the correct order
 
-def get_all_performance(run_keyword, results_dir='./swe_bench'):
+def get_all_performance(run_keyword, results_dir='.'):
     """
     Retrieve performance results for all runs based on the provided keyword.
 
@@ -108,20 +108,20 @@ def is_compiled_self_improve(metadata, num_swe_issues=[], logger=None):
 
     # 1. Must have the required keys
     if not overall_perf or not all(k in overall_perf for k in required_keys):
-        logger.info(f"no required keys")
+        if logger: logger.info("no required keys")
         return False
 
     # 2. Must have at least one non-empty patch
     num_resolved = len(overall_perf['total_resolved_ids'])
     num_unresolved = len(overall_perf['total_unresolved_ids'])
     if (num_resolved + num_unresolved) == 0:
-        logger.info(f"no non-empty patch")
+        if logger: logger.info("no non-empty patch")
         return False
 
     # 3. If specified, total evaluated must match num_swe_issues, else it means that some didn't compile
     total_evaluated = overall_perf['total_submitted_instances']
-    if total_evaluated < num_swe_issues[0]:
-        logger.info(f"not match num_issues")
+    if num_swe_issues and total_evaluated < num_swe_issues[0]:
+        if logger: logger.info("not match num_issues")
         return False
 
     return True
