@@ -1,14 +1,9 @@
 datasets
 anthropic
-anthropic[bedrock]
 backoff
-botocore
-boto3
 openai
 
-# SWE-Bench
-beautifulsoup4
-chardet
+# Infraestrutura DGM
 docker
 ghapi
 GitPython
@@ -17,7 +12,10 @@ python-dotenv
 rich
 unidiff
 
+# ML — usados pelo nn_agent.py dentro do container Docker
+torch
+torchvision
+
 # pytest
 pytest
-pytest-asyncio
-async_timeout
+
