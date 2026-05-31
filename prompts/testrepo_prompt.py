@@ -1,30 +1,25 @@
+"""
+prompts/testrepo_prompt.py — Descrição de como testar o agente NN.
+
+Fornece instruções sobre como executar o nn_agent.py e verificar
+os resultados de treinamento.
+"""
 
 
-def get_test_command(eval_script):
-    test_hint = ''
-    # test_command is the 2nd last line in eval_script
-    lines = eval_script.strip().split('\n')
-    test_command = lines[-2].strip()
-    # Remove trailing arguments specifying filepaths
-    parts = test_command.split()
-    if '.' in parts[-1] and not parts[-1].endswith('.py'):
-        # Get the test hint
-        test_hint = 'If the target test file path is tests/some_folder/some_file.py, then <specific test files> should be `some_folder.some_file`.'
-    while parts and '.' in parts[-1]:
-        parts.pop()
-    # Reconstruct the command
-    test_command = ' '.join(parts)
-    return f'cd /testbed/ && {test_command} <specific test files>', test_hint
-
-def get_test_description(eval_script='', swerepo=False, polyglot=False):
-    assert not (swerepo and polyglot), "swerepo and polyglot cannot both be True"
-    if swerepo:  # SWE repo
-        swe_prompt = '''The tests in the repository can be run with the bash command `{test_command}`. If no specific test files are provided, all tests will be run. The given command-line options must be used EXACTLY as specified. Do not use any other command-line options. {test_hint}'''
-        test_command, test_hint = get_test_command(eval_script)
-        description = swe_prompt.format(test_command=test_command, test_hint=test_hint)
-    elif polyglot:
-        description = f"In the repository folder, the tests can be run with the following bash command(s):\n\n```{eval_script}```\n"
-    else:  # dgm repo
-        description = 'The tests in the repository can be run with the bash command `cd /dgm/ && pytest -rA <specific test files>`. If no specific test files are provided, all tests will be run. The given command-line options must be used EXACTLY as specified. Do not use any other command-line options. ONLY test tools and utils. NEVER try to test or run agentic_system.forward().'
-
+def get_test_description():
+    """
+    Returns a description of how to test the NN training agent.
+    Used by the coding agent to understand how to verify changes.
+    """
+    description = (
+        'The NN training agent can be tested by running:\n'
+        '  `cd /dgm/ && python nn_agent.py --task_id <task_id> --output_file /tmp/result.json`\n\n'
+        'Available tasks: mnist, fashion_mnist, cifar10, cifar100, svhn, stl10.\n\n'
+        'The result.json file will contain accuracy, loss, epochs_trained, and training history.\n'
+        'A task is considered "resolved" if accuracy >= the task threshold '
+        '(e.g., 0.99 for MNIST, 0.90 for Fashion-MNIST, 0.70 for CIFAR-10).\n\n'
+        'To run a quick validation, test with MNIST first (fastest task):\n'
+        '  `python nn_agent.py --task_id mnist --output_file /tmp/result.json`\n'
+        '  Then check: `cat /tmp/result.json` — verify accuracy and error fields.'
+    )
     return description.strip()
