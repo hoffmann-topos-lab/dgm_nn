@@ -19,6 +19,9 @@ from utils.evo_utils import load_dgm_metadata, is_compiled_self_improve
 
 _metadata_cache = {}
 
+# Ordem do currículo progressivo: do mais fácil ao mais difícil.
+CURRICULUM_LEVELS = ['small', 'medium', 'big']
+
 
 def load_metadata_cached(output_dir, commit):
     """Carrega o metadata.json de um commit, com cache em memória (ver Gargalo 3a)."""
@@ -26,6 +29,44 @@ def load_metadata_cached(output_dir, commit):
     if path not in _metadata_cache:
         _metadata_cache[path] = load_json_file(path)
     return _metadata_cache[path]
+
+
+def _load_subset(level):
+    return load_json_file(f"./nn_bench/subsets/{level}.json")
+
+
+def _level_mastered(output_dir, archive, task_set):
+    """True se algum agente do archive resolveu TODAS as tarefas de task_set."""
+    target = set(task_set)
+    if not target:
+        return True
+    for commit in archive:
+        try:
+            meta = load_metadata_cached(output_dir, commit)
+            resolved = set(meta['overall_performance']['total_resolved_ids'])
+        except Exception:
+            continue
+        if target.issubset(resolved):
+            return True
+    return False
+
+
+def get_curriculum_tasks(output_dir, archive, max_level='big'):
+    """
+    Retorna a lista de tarefas 'desbloqueadas' pelo currículo progressivo.
+
+    Começa sempre em 'small'. Um nível mais difícil só é desbloqueado quando
+    algum agente do archive já resolveu TODAS as tarefas dos níveis já abertos
+    (i.e., dominou o nível atual). Assim o DGM só escala para tarefas mais
+    difíceis depois de resolver as mais fáceis.
+    """
+    levels = CURRICULUM_LEVELS[:CURRICULUM_LEVELS.index(max_level) + 1]
+    unlocked = _load_subset(levels[0])
+    for level in levels[1:]:
+        if not _level_mastered(output_dir, archive, unlocked):
+            break
+        unlocked = unlocked + _load_subset(level)
+    return unlocked
 
 
 def initialize_run(output_dir, prevrun_dir=None):
@@ -52,7 +93,8 @@ def initialize_run(output_dir, prevrun_dir=None):
     return archive, start_gen_num
 
 
-def choose_selfimproves(output_dir, archive, selfimprove_size, method='random', run_baseline=None):
+def choose_selfimproves(output_dir, archive, selfimprove_size, method='random',
+                        run_baseline=None, active_tasks=None):
     """
     Escolhe os pares (parent_commit, task_id) para os self-improve attempts
     da geração atual.
@@ -60,7 +102,15 @@ def choose_selfimproves(output_dir, archive, selfimprove_size, method='random', 
     Para cada pai escolhido:
     - 25% de chance de selecionar 'solve_empty_patches' se ≥10% das tarefas
       falharam em gerar código (entry vazia).
-    - Caso contrário, escolhe um task_id não-resolvido aleatoriamente.
+    - Caso contrário, escolhe um task_id-alvo aleatoriamente.
+
+    `active_tasks` (modo currículo): quando fornecido, o alvo passa a ser
+    qualquer tarefa desbloqueada que o pai ainda NÃO resolveu — incluindo
+    níveis recém-abertos que ele nunca tentou. Isso faz o agente avançar para
+    tarefas mais difíceis só depois de resolver as fáceis e evita o impasse em
+    que um pai que já resolveu tudo (unresolved_ids vazio) deixava a geração
+    sem nenhuma entrada. Sem `active_tasks`, mantém o comportamento original
+    (alvo = apenas tarefas avaliadas e não-resolvidas).
     """
     selfimprove_entries = []
 
@@ -126,10 +176,17 @@ def choose_selfimproves(output_dir, archive, selfimprove_size, method='random', 
             selfimprove_entries.append((parent_commit, 'solve_empty_patches'))
             continue
 
-        # Escolhe uma tarefa não-resolvida aleatoriamente
-        if not unresolved_ids:
+        # Define as tarefas-alvo a melhorar
+        if active_tasks is not None:
+            resolved_set = set(resolved_ids)
+            target_ids = [t for t in active_tasks if t not in resolved_set]
+        else:
+            target_ids = unresolved_ids
+
+        # Escolhe uma tarefa-alvo aleatoriamente
+        if not target_ids:
             continue
-        entry = random.choice(unresolved_ids)
+        entry = random.choice(target_ids)
         selfimprove_entries.append((parent_commit, entry))
 
     return selfimprove_entries
@@ -219,6 +276,13 @@ def main():
                         help="Diagnóstico pós self-improvement (verifica se patch compilou).")
     parser.add_argument("--shallow_eval", default=False, action='store_true',
                         help="Avaliação rasa: usa apenas tarefas small (mais rápido).")
+    parser.add_argument("--curriculum", default=False, action='store_true',
+                        help="Currículo progressivo: só avança para tarefas mais "
+                             "difíceis depois que algum agente resolveu TODAS as "
+                             "do nível atual. Tem precedência sobre --shallow_eval.")
+    parser.add_argument("--curriculum_max_level", type=str, default='big',
+                        choices=['medium', 'big'],
+                        help="Nível máximo que o currículo pode desbloquear.")
     parser.add_argument("--eval_noise", type=float, default=0.1,
                         help="Margem de ruído para keep_better.")
     parser.add_argument("--no_full_eval", default=False, action='store_true',
@@ -260,11 +324,33 @@ def main():
 
     for gen_num in range(start_gen_num, args.max_generation):
 
+        # Currículo: lista de tarefas desbloqueadas nesta geração
+        if args.curriculum:
+            active_tasks = get_curriculum_tasks(
+                output_dir, archive, max_level=args.curriculum_max_level
+            )
+            logger.info(
+                f"Gen {gen_num} — currículo ativo ({len(active_tasks)} tarefas): {active_tasks}"
+            )
+        else:
+            active_tasks = None
+
+        # Listas de avaliação efetivas desta geração
+        if args.curriculum:
+            eval_task_list = active_tasks
+            eval_more_threshold = None      # escalada é controlada pelo currículo
+            eval_task_list_more = None
+        else:
+            eval_task_list = nn_tasks_sm
+            eval_more_threshold = None if args.shallow_eval else test_more_threshold
+            eval_task_list_more = None if args.shallow_eval else nn_tasks_med
+
         # Seleciona (parent, task_id) para esta geração
         selfimprove_entries = choose_selfimproves(
             output_dir, archive, args.selfimprove_size,
             method=args.choose_selfimproves_method,
             run_baseline=args.run_baseline,
+            active_tasks=active_tasks,
         )
         print(f"[DEBUG] Gen {gen_num} — selfimprove_entries: {selfimprove_entries}")
         logger.info(f"Gen {gen_num} — entradas de self-improve: {selfimprove_entries}")
@@ -285,9 +371,9 @@ def main():
                     num_evals=args.num_evals,
                     post_improve_diagnose=args.post_improve_diagnose,
                     entry=entry,
-                    test_task_list=nn_tasks_sm,
-                    test_more_threshold=None if args.shallow_eval else test_more_threshold,
-                    test_task_list_more=None if args.shallow_eval else nn_tasks_med,
+                    test_task_list=eval_task_list,
+                    test_more_threshold=eval_more_threshold,
+                    test_task_list_more=eval_task_list_more,
                     full_eval_threshold=full_eval_threshold,
                     run_baseline=args.run_baseline,
                 )
@@ -296,7 +382,7 @@ def main():
 
             for future in as_completed(futures):
                 try:
-                    metadata = future.result(timeout=1.5 * 60 * 60)  # 1.5h timeout
+                    metadata = future.result(timeout=5 * 60 * 60)  # 5h timeout
                     selfimprove_ids.append(metadata['run_id'])
                     print(f"[DEBUG] Self-improve concluído: {metadata['run_id']}")
                 except TimeoutError:
@@ -311,11 +397,12 @@ def main():
 
         # Filtra runs inválidos e atualiza o archive
         logger.info(f"Atualizando archive para geração {gen_num}")
-        num_nn_tasks = (
-            [len(nn_tasks_sm)]
-            if args.shallow_eval
-            else [len(nn_tasks_sm), len(nn_tasks_med)]
-        )
+        if args.curriculum:
+            num_nn_tasks = [len(active_tasks)]
+        elif args.shallow_eval:
+            num_nn_tasks = [len(nn_tasks_sm)]
+        else:
+            num_nn_tasks = [len(nn_tasks_sm), len(nn_tasks_med)]
         selfimprove_ids_compiled = filter_compiled(
             selfimprove_ids, output_dir, num_nn_tasks=num_nn_tasks, logger=logger
         )
